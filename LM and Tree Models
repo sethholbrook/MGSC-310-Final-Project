@@ -1,0 +1,150 @@
+# load all your libraries here
+library('tidyverse')
+library(caret)
+library(glmnet)  # For regularized regression
+library(randomForest)
+library(dplyr)
+library(ggcorrplot)
+library(tree)
+library(randomForest)
+library(randomForestExplainer)
+library('rsample')
+library(ggridges)
+# note, do not run install.packages() inside a code chunk. install them in the console outside of a code chunk. 
+
+# Load the dataset
+baseball <- read.csv("500hits.csv")
+
+#Look at data
+baseball %>% glimpse()
+
+summary(baseball) 
+
+#Data clean 
+baseball_clean = baseball %>% 
+  select(-HR, -HOF, -PLAYER)
+
+baseball_clean %>% glimpse()
+
+#Feature transformation
+# Adding new features based on interactions and polynomial transformations
+# Adding new features based on interactions
+baseball_clean <- baseball_clean %>%
+  mutate(
+    # Interaction between 'Hits' (H) and 'At-bats' (AB)
+    hits_at_bat_interaction = H * AB,
+    
+    # Experience interaction: Games (G) and Batting Average (BA)
+    experience_interaction = G * BA,
+    
+    # Standardizing key metrics
+    normalized_hits = scale(H),
+    normalized_at_bat = scale(AB),
+    
+    # Ratio of Runs (R) to Games (G)
+    runs_to_games_ratio = R / G,
+    
+    # Log transformation of RBI if highly skewed
+    log_rbi = log1p(RBI),
+    
+    # Interaction between years played (YRS) and hits (H)
+    years_hits_interaction = YRS * H
+  )
+
+glimpse(baseball_clean)
+
+#Visualization
+# Boxplot of Runs to Games Ratio by Years Played
+ggplot(baseball_clean, aes(x = factor(YRS), y = runs_to_games_ratio)) +
+  geom_boxplot(aes(fill = factor(YRS))) +
+  labs(title = "Runs to Games Ratio by Years Played",
+       x = "Years Played",
+       y = "Runs to Games Ratio",
+       fill = "Years Played") +
+  theme_minimal()
+
+#Visualization
+ggplot(baseball_clean, aes(x = BA)) +
+  geom_density(aes(fill = factor(cut(YRS, breaks = 3))), alpha = 0.5) +  # Density with fill based on years played segments
+  facet_wrap(~cut(YRS, breaks = 3)) +  # Facet by years played categories
+  labs(title = "Density of Batting Averages by Experience Categories",
+       x = "Batting Average",
+       y = "Density",
+       fill = "Years Played Category") +
+  theme_minimal()
+
+#This plot will show the distribution of batting averages, overlaying density plots for different ranges of years played to see how experience affects batting averages.
+
+#Correlation matrix
+cor.table <- cor(baseball_clean %>% select_if(is.numeric))
+print(cor.table)
+
+ggcorrplot(cor.table, type="lower")
+
+
+# Visualizations (example)
+ggplot(baseball, aes(x = R, y = H)) + 
+  geom_point() + 
+  labs(x = "Runs Scored", y = "Hits") +
+  ggtitle("Relationship between Runs Scored and Hits")
+
+
+#Split the data set into train and test
+baseball_split <- initial_split(baseball_clean, prop=.75)
+baseball_train <- training(baseball_split)
+baseball_test <- testing(baseball_split)
+
+
+#Linear Regression Model
+
+glimpse(baseball_clean)
+runs_model <- lm(R ~ .-runs_to_games_ratio, data=baseball_train)
+
+
+summary(runs_model)
+#Predicted values for train/test and RMSE 
+pred_train = predict(runs_model, baseball_train)
+pred_test = predict(runs_model, baseball_test)
+
+#RMSE
+RMSE(pred_train, baseball_train$R)
+RMSE(pred_test, baseball_test$R)
+
+
+#Tree Model to Predict Runs
+tree_mod <- tree(R ~.-runs_to_games_ratio, baseball_train)
+summary(tree_mod)
+print(tree_mod)
+
+#Plot the tree
+plot(tree_mod)
+text(tree_mod, pretty = 0, cex = 0.4, digits = 2)
+
+#Predicted values for train/test and RMSE 
+pred_train = predict(tree_mod, baseball_train)
+pred_test = predict(tree_mod, baseball_test)
+
+#RMSE
+RMSE(pred_train, baseball_train$R)
+RMSE(pred_test, baseball_test$R)
+
+#Cross validate to find best tree size
+cv.baseball <- cv.tree(tree_mod)
+print(cv.baseball)
+
+# find the best tree size
+cv.result <- data.frame(
+  tree_size = cv.baseball$size,
+  mse = cv.baseball$dev
+)
+
+options(scipen = 100)
+
+print(cv.result)
+
+# plot the error vs tree 
+ggplot(cv.result, aes(tree_size, mse)) +
+  geom_point() +
+  geom_line()
+#Dont't Prune, best model is at 12, maybe add more variables?
+
