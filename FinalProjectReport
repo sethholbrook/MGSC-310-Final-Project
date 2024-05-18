@@ -1,0 +1,235 @@
+# load all your libraries here
+library('tidyverse')
+library(caret)
+library(glmnet)  # For regularized regression
+library(randomForest)
+library(dplyr)
+library(ggcorrplot)
+library(tree)
+library(randomForest)
+library(randomForestExplainer)
+library('rsample')
+library(ggridges)
+set.seed(310)
+# note, do not run install.packages() inside a code chunk. install them in the console outside of a code chunk. 
+
+# Load the dataset
+baseball <- read.csv("data sets/500hits.csv")
+
+#Look at data
+baseball %>% glimpse()
+
+summary(baseball) 
+
+#Data clean 
+baseball_clean <-  baseball %>% 
+  select(-HR, -HOF, -PLAYER)
+
+baseball_clean %>% glimpse()
+
+#Feature transformation
+# Adding new features based on interactions and polynomial transformations
+# Adding new features based on interactions
+baseball_clean <- baseball_clean %>%
+  mutate(
+    # Interaction between 'Hits' (H) and 'At-bats' (AB)
+    hits_at_bat_interaction = H * AB,
+    
+    # Experience interaction: Games (G) and Batting Average (BA)
+    experience_interaction = G * BA,
+    
+    # Standardizing key metrics
+    normalized_hits = scale(H),
+    normalized_at_bat = scale(AB),
+    
+    # Ratio of Runs (R) to Games (G)
+    runs_to_games_ratio = R / G,
+    
+    # Log transformation of RBI if highly skewed
+    log_rbi = log1p(RBI),
+    
+    # Interaction between years played (YRS) and hits (H)
+    years_hits_interaction = YRS * H,
+    #at bats per game
+    abpg = AB/G,
+    #hits per game
+    hpg = H/G,
+    #rbi's per game
+    rbipg = RBI/G,
+    #triples per game
+    x3pg = X3B/G,
+    #doubles per game
+    x2pg = X2B/G,
+    #walks per game
+    bbpg = BB/G,
+    #Strikeouts per game
+    sopg = SO/G,
+    #Stolen bases per game
+    sbpg = SB/G,
+    #Caught Stealing per game
+    cspg = CS/G,
+  )
+
+glimpse(baseball_clean)
+view(baseball_clean)
+summary(baseball_clean)
+
+#Visualization
+# Boxplot of Runs to Games Ratio by Years Played
+ggplot(baseball_clean, aes(x = factor(YRS), y = runs_to_games_ratio)) +
+  geom_boxplot(aes(fill = factor(YRS))) +
+  labs(title = "Runs to Games Ratio by Years Played",
+       x = "Years Played",
+       y = "Runs to Games Ratio",
+       fill = "Years Played") +
+  theme_minimal()
+
+#Visualization
+ggplot(baseball_clean, aes(x = BA)) +
+  geom_density(aes(fill = factor(cut(YRS, breaks = 3))), alpha = 0.5) +  # Density with fill based on years played segments
+  facet_wrap(~cut(YRS, breaks = 3)) +  # Facet by years played categories
+  labs(title = "Density of Batting Averages by Experience Categories",
+       x = "Batting Average",
+       y = "Density",
+       fill = "Years Played Category") +
+  theme_minimal()
+
+#This plot will show the distribution of batting averages, overlaying density plots for different ranges of years played to see how experience affects batting averages.
+
+#Correlation matrix
+cor.table <- cor(baseball_clean %>% select_if(is.numeric))
+print(cor.table)
+
+ggcorrplot(cor.table, type="lower")
+
+
+# Visualizations
+ggplot(baseball, aes(x = R, y = H)) + 
+  geom_point() + 
+  labs(x = "Runs Scored", y = "Hits") +
+  ggtitle("Relationship between Runs Scored and Hits")
+
+#Split the data set into train and test
+baseball_split <- initial_split(baseball_clean, prop=.75)
+baseball_train <- training(baseball_split)
+baseball_test <- testing(baseball_split)
+
+
+#Linear Regression Model 
+runs_model <- lm(R ~ .-runs_to_games_ratio -hits_at_bat_interaction -experience_interaction -normalized_hits -normalized_at_bat -log_rbi -hpg -rbipg -x3pg -x2pg -bbpg -sopg -sbpg -cspg, data=baseball_train)
+
+
+summary(runs_model)
+
+#Predicted values for train/test and RMSE 
+pred_train = predict(runs_model, baseball_train)
+
+pred_test = predict(runs_model, baseball_test)
+
+#RMSE for Cumulative Stats
+RMSE(pred_train, baseball_train$R)
+
+RMSE(pred_test, baseball_test$R)
+
+glimpse(baseball_clean)
+
+#Linear Regression Model runs to game ratio
+
+glimpse(baseball_clean)
+runs_pg_model <- lm(runs_to_games_ratio ~ YRS +G +abpg +hpg +rbipg +x3pg +x2pg +bbpg +sopg +sbpg +cspg, data=baseball_train)
+
+
+summary(runs_pg_model)
+
+#Predicted values for train/test and RMSE 
+pred_train = predict(runs_pg_model, baseball_train)
+
+pred_test = predict(runs_pg_model, baseball_test)
+
+#RMSE
+RMSE(pred_train, baseball_train$runs_to_games_ratio)
+
+RMSE(pred_test, baseball_test$runs_to_games_ratio)
+
+glimpse(baseball_clean)
+
+#Tree Model to Predict Runs for a career 
+tree_mod <- tree(R ~ G + BB + H + BA + SO + CS + SB + RBI + YRS + X3B + X2B, baseball_train)
+summary(tree_mod)
+print(tree_mod)
+
+#Plot the tree
+plot(tree_mod)
+text(tree_mod, pretty = 0, cex = 0.8, digits = 2)
+
+#Predicted values for train/test and RMSE 
+pred_train = predict(tree_mod, baseball_train)
+pred_test = predict(tree_mod, baseball_test)
+
+#RMSE
+RMSE(pred_train, baseball_train$R)
+RMSE(pred_test, baseball_test$R)
+
+#Cross validate to find best tree size
+cv.baseball <- cv.tree(tree_mod)
+print(cv.baseball)
+
+# find the best tree size
+cv.result <- data.frame(
+  tree_size = cv.baseball$size,
+  mse = cv.baseball$dev
+)
+
+
+options(scipen = 100)
+
+print(cv.result)
+
+#lowest MSE at 11 branches
+
+# plot the error vs tree 
+ggplot(cv.result, aes(tree_size, mse)) +
+  geom_point() +
+  geom_line()
+
+#Tree Model to Predict Runs per game 
+tree_mod_pg <- tree(runs_to_games_ratio ~ YRS +G +abpg +hpg +rbipg +x3pg +x2pg +bbpg +sopg +sbpg +cspg, baseball_train)
+summary(tree_mod_pg)
+print(tree_mod_pg)
+
+#Plot the tree
+plot(tree_mod_pg)
+text(tree_mod_pg, pretty = 0, cex = 0.8, digits = 2)
+
+#Predicted values for train/test and RMSE 
+pred_train = predict(tree_mod_pg, baseball_train)
+pred_test = predict(tree_mod_pg, baseball_test)
+
+#RMSE
+RMSE(pred_train, baseball_train$runs_to_games_ratio)
+RMSE(pred_test, baseball_test$runs_to_games_ratio)
+
+#Cross validate to find best tree size
+cv.baseball <- cv.tree(tree_mod_pg)
+print(cv.baseball)
+
+# find the best tree size
+cv.result <- data.frame(
+  tree_size = cv.baseball$size,
+  mse = cv.baseball$dev
+)
+
+options(scipen = 100)
+
+print(cv.result)
+
+# plot the error vs tree 
+ggplot(cv.result, aes(tree_size, mse)) +
+  geom_point() +
+  geom_line()
+#Dont't Prune, best model is at 14 because of lowest MSE
+#probably most efficient to prune at either 6 or 11 due to diminishing returns from extra branches at those points
+
+
+
+
